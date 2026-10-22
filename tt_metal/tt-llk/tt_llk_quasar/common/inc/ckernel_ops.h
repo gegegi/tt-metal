@@ -6,14 +6,16 @@
 
 #if __riscv_xtttensixqsr || (__clang__ && defined(ARCH_QUASAR) && defined(COMPILE_FOR_TRISC))
 #if __clang__
-// User is likely using static analysis tool.  Provide a declaration.
+// User is likely using static analysis tool. Provide a declarations.
 extern "C" void __builtin_rvtt_ttinsn(volatile unsigned long *, unsigned, unsigned, unsigned, unsigned) __attribute__((nothrow));
+extern "C" void __builtin_rvtt_ttreplay(volatile unsigned long *, unsigned, unsigned, unsigned, unsigned, unsigned, unsigned, unsigned)
+    __attribute__((nothrow));
 #endif
 #define TT_INSN(ENCODING)  __builtin_rvtt_ttinsn(::ckernel::instrn_buffer, (ENCODING), 0, 0, 0)
 #define TTI_INSN(ENCODING) __builtin_rvtt_ttinsn(nullptr, (ENCODING), 0, 0, 0)
 #elif defined(ARCH_QUASAR) && defined(LLK_BOOT_BRISC)
 // The llk test infra uses TTI macros on brisc and somehow executes
-// it. So icky. See #58141
+// it. So icky. See #58141.
 #define TTI_INSN(ENCODING) ({ __asm__ __volatile__(".4byte ((%0 >> 30) & 3) | ((%0 & 0x3fffffff) << 2)" ::"n"(unsigned(ENCODING))); })
 #define TT_INSN(ENCODING)  ({ __asm__ __volatile__(".error \"TT_INSN in non-tensix code\"" ::"X"(unsigned(ENCODING))); })
 #else
@@ -476,12 +478,14 @@ extern "C" void __builtin_rvtt_ttinsn(volatile unsigned long *, unsigned, unsign
 #define TT_OP_RDCFG(GprAddress, CfgReg) TT_OP(0xb1, (((GprAddress) << 16) + ((CfgReg) << 0)))
 #define TT_RDCFG(GprAddress, CfgReg)                                    TT_INSN(TT_OP_RDCFG(GprAddress, CfgReg))
 #define TTI_RDCFG(GprAddress, CfgReg)                                   TTI_INSN(TT_OP_RDCFG(GprAddress, CfgReg))
+
 #define TT_OP_REPLAY(start_idx, len, last, set_mutex, execute_while_loading, load_mode) \
     TT_OP(0x04, (((start_idx) << 14) + ((len) << 4) + ((last) << 3) + ((set_mutex) << 2) + ((execute_while_loading) << 1) + ((load_mode) << 0)))
 #define TT_REPLAY(start_idx, len, last, set_mutex, execute_while_loading, load_mode) \
-    TT_INSN(TT_OP_REPLAY(start_idx, len, last, set_mutex, execute_while_loading, load_mode))
+    __builtin_rvtt_ttreplay(::ckernel::instrn_buffer, ((start_idx) << 10) | (len), 0, 0, (execute_while_loading), (load_mode), (last), (set_mutex))
 #define TTI_REPLAY(start_idx, len, last, set_mutex, execute_while_loading, load_mode) \
-    TTI_INSN(TT_OP_REPLAY(start_idx, len, last, set_mutex, execute_while_loading, load_mode))
+    __builtin_rvtt_ttreplay(nullptr, ((start_idx) << 10) | (len), 0, 0, (execute_while_loading), (load_mode), (last), (set_mutex))
+
 #define TT_OP_RESOURCEDECL(linger_time, resources, op_class) TT_OP(0x05, (((linger_time) << 15) + ((resources) << 5) + ((op_class) << 0)))
 #define TT_RESOURCEDECL(linger_time, resources, op_class)    TT_INSN(TT_OP_RESOURCEDECL(linger_time, resources, op_class))
 #define TTI_RESOURCEDECL(linger_time, resources, op_class)   TTI_INSN(TT_OP_RESOURCEDECL(linger_time, resources, op_class))
