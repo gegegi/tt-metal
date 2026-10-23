@@ -336,7 +336,7 @@ MeshWorkload make_relay_like_workload(
 
     MeshWorkload workload;
     for (const auto& coord : coords) {
-        auto program = CreateProgram();
+        auto program = CreateProgram(*mesh);
         auto cb_cfg = CircularBufferConfig(page_size, {{kScratchCb, tt::DataFormat::UInt32}})
                           .set_page_size(kScratchCb, page_size);
         CreateCircularBuffer(program, worker_cores, cb_cfg);
@@ -426,7 +426,7 @@ MeshWorkload make_d2h_relay_workload(
 
     MeshWorkload workload;
     for (const auto& coord : coords) {
-        auto program = CreateProgram();
+        auto program = CreateProgram(*mesh);
         auto cb_cfg = CircularBufferConfig(page_size, {{kScratchCb, tt::DataFormat::UInt32}})
                           .set_page_size(kScratchCb, page_size);
         CreateCircularBuffer(program, worker_cores, cb_cfg);
@@ -515,7 +515,7 @@ MeshWorkload make_stress_compute_workload(
 
     MeshWorkload workload;
     for (const auto& coord : coords) {
-        auto program = CreateProgram();
+        auto program = CreateProgram(*mesh);
         auto cb_cfg = CircularBufferConfig(page_size, {{kScratchCb, tt::DataFormat::UInt32}})
                           .set_page_size(kScratchCb, page_size);
         CreateCircularBuffer(program, worker_cores, cb_cfg);
@@ -616,7 +616,7 @@ MeshWorkload make_stress_d2h_compute_workload(
 
     MeshWorkload workload;
     for (const auto& coord : coords) {
-        auto program = CreateProgram();
+        auto program = CreateProgram(*mesh);
         auto cb_cfg = CircularBufferConfig(page_size, {{kScratchCb, tt::DataFormat::UInt32}})
                           .set_page_size(kScratchCb, page_size);
         CreateCircularBuffer(program, worker_cores, cb_cfg);
@@ -687,7 +687,7 @@ MeshWorkload make_stress_signal_workload(D2DStreamServiceSender* outbound, const
 
     MeshWorkload workload;
     for (const auto& coord : coords) {
-        auto program = CreateProgram();
+        auto program = CreateProgram(*mesh);
         auto kernel = CreateKernel(
             program,
             "tests/ttnn/unit_tests/gtests/tensor/kernels/d2d_stress_relay.cpp",
@@ -724,7 +724,7 @@ MeshWorkload make_gate_workload(
 
     MeshWorkload workload;
     for (const auto& coord : coords) {
-        auto program = CreateProgram();
+        auto program = CreateProgram(*mesh);
         CreateKernel(
             program,
             "tests/ttnn/unit_tests/gtests/tensor/kernels/d2d_sync.cpp",
@@ -760,7 +760,7 @@ MeshWorkload make_stub_fabric_workload(
 
     MeshWorkload workload;
     for (const auto& coord : coords) {
-        auto program = CreateProgram();
+        auto program = CreateProgram(*mesh);
         const auto sender_node = mesh->get_fabric_node_id(coord);
         const tt::tt_fabric::FabricNodeId downstream_node(
             down_mesh_id, mesh_graph.coordinate_to_chip(down_mesh_id, coord, down_host_rank));
@@ -802,7 +802,7 @@ MeshWorkload make_stress_fabric_workload(
 
     MeshWorkload workload;
     for (const auto& coord : MeshCoordinateRange(mesh->shape())) {
-        auto program = CreateProgram();
+        auto program = CreateProgram(*mesh);
         auto* device = mesh->get_device(coord);
         const auto sender_node = mesh->get_fabric_node_id(coord);
         const auto fabric_core_phys = device->worker_core_from_logical_core(fabric_core);
