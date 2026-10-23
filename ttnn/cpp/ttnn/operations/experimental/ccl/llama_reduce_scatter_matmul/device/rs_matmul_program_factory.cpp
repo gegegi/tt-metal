@@ -34,7 +34,7 @@ ttnn::device_operation::CachedProgram<Matmul_RS::Matmul_RS_PF::shared_variables_
     const ttnn::MeshCoordinate& mesh_coordinate,
     const tensor_args_t& tensor_args,
     std::vector<Tensor>& tensor_return_value) {
-    tt::tt_metal::Program program{};
+    tt::tt_metal::Program program = tt::tt_metal::CreateProgram(*tensor_args.matmul.input_tensor.device());
 
     tt::tt_metal::SubDeviceId sub_device_id = operation_attributes.rs_op.subdevice_id.value();
     auto [part_cores, rs_cores] =
