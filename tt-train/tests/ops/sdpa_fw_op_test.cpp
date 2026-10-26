@@ -1748,22 +1748,20 @@ TEST_F(SDPAForwardTest, SDPAForwardTest_ChunkKnobs_DefaultPick) {
     EXPECT_EQ(pinned.Sk_chunk_t, 1U);
     EXPECT_GE(pinned.rows(), 4U);
 
-    // Few causal sequences (8 heads, S=2048): four-row chunks give 64 light/heavy pairs for 130 cores, so
-    // the pick shrinks to one row per chunk (256 pairs) and keeps every core on a balanced pair, as main
-    // did, instead of falling back to an unbalanced contiguous split.
+    // Few causal sequences (8 heads, S=2048): four-row chunks give 128 items for 130 cores, so the pick
+    // shrinks to two rows per chunk (256 items) and keeps every core busy.
     SDPAForwardShape few_seqs = tinyllama;
     few_seqs.q_heads = 8U;
     few_seqs.kv_heads = 8U;
     const auto picked_few = resolve_chunks({}, few_seqs, kBudget, kCores);
-    EXPECT_EQ(picked_few.Sq_chunk_t, 1U);
-    EXPECT_GE(num_work_units(few_seqs, picked_few, kCores), kCores);
+    EXPECT_EQ(picked_few.Sq_chunk_t, 2U);
+    EXPECT_GE(num_work_items(few_seqs, picked_few), kCores);
     EXPECT_EQ(picked_few.Sk_chunk_t, picked.Sk_chunk_t) << "the K/V step does not depend on the core count";
 }
 
 TEST_F(SDPAForwardTest, SDPAForwardTest_ChunkKnobs_SplitWork) {
-    // Host-only: causal chunks go out as (i, n-1-i) pairs, every item exactly once, when there is a pair for
-    // every core (main's rule); fewer pairs than cores, an odd chunk count and the other mask modes get
-    // contiguous blocks of items.
+    // Host-only: causal items go out longest first, every item exactly once, so the per-core K/V step
+    // totals differ by at most one item's steps; the other mask modes get contiguous blocks of items.
     using namespace ttml::metal::ops::sdpa_fw::device;
     constexpr uint32_t kCores = 130U;
     const auto items_of = [](const CoreItemRuns& runs) {
@@ -1799,62 +1797,52 @@ TEST_F(SDPAForwardTest, SDPAForwardTest_ChunkKnobs_SplitWork) {
         .has_gate = false,
         .return_intermediates = true};
     const SDPAForwardChunks four_rows{.Sq_chunk_t = 4U, .Sk_chunk_t = 8U, .heads_per_item = 1U};
-    // 32 sequences x 4 chunks = 128 items = 64 pairs. With 130 cores that is fewer pairs than cores, so as
-    // on main the items go out contiguously, one per core on 128 cores.
+    // 32 sequences x 4 chunks = 128 items on 128 cores: one item each.
     ASSERT_EQ(num_work_items(causal, four_rows), 128U);
-    ASSERT_EQ(num_causal_pairs(causal, four_rows), 64U);
-    EXPECT_EQ(num_work_units(causal, four_rows, kCores), 128U);
-    const auto unpaired = split_work(causal, four_rows, 128U, kCores);
-    ASSERT_EQ(unpaired.size(), 128U);
-    check_each_item_once(unpaired, 128U);
-    for (const auto& runs : unpaired) {
+    const auto one_each = split_work(causal, four_rows, 128U);
+    ASSERT_EQ(one_each.size(), 128U);
+    check_each_item_once(one_each, 128U);
+    for (const auto& runs : one_each) {
         EXPECT_EQ(items_of(runs).size(), 1U) << "one item per core";
     }
-    // With 64 cores every core gets a pair: paired on 64 cores.
-    constexpr uint32_t kPairCores = 64U;
-    ASSERT_EQ(num_work_units(causal, four_rows, kPairCores), 64U);
-    const uint32_t num_cores = std::min(kPairCores, num_work_units(causal, four_rows, kPairCores));
-    EXPECT_EQ(num_cores, 64U);
-    const auto paired = split_work(causal, four_rows, num_cores, kPairCores);
-    ASSERT_EQ(paired.size(), num_cores);
-    check_each_item_once(paired, 128U);
-    constexpr uint32_t kChunksPerSeq = 4U;
-    for (const auto& runs : paired) {
-        const auto items = items_of(runs);
-        ASSERT_EQ(items.size(), 2U) << "one pair per core";
-        const uint32_t seq = items[0] / kChunksPerSeq;
-        EXPECT_EQ(items[1] / kChunksPerSeq, seq) << "a pair stays inside one sequence";
-        EXPECT_EQ(items[0] % kChunksPerSeq + items[1] % kChunksPerSeq, kChunksPerSeq - 1U)
-            << "chunk i goes with chunk n-1-i";
+    // Fewer cores than items: longest first balances the K/V steps per core.
+    constexpr uint32_t kFewCores = 40U;
+    const auto balanced = split_work(causal, four_rows, kFewCores);
+    ASSERT_EQ(balanced.size(), kFewCores);
+    check_each_item_once(balanced, 128U);
+    uint32_t min_steps = UINT32_MAX;
+    uint32_t max_steps = 0U;
+    uint32_t max_item_steps = 0U;
+    for (const auto& runs : balanced) {
+        uint32_t steps = 0U;
+        for (const uint32_t item : items_of(runs)) {
+            const uint32_t item_steps = num_kv_steps(causal, four_rows, item);
+            steps += item_steps;
+            max_item_steps = std::max(max_item_steps, item_steps);
+        }
+        min_steps = std::min(min_steps, steps);
+        max_steps = std::max(max_steps, steps);
     }
-    // Fewer cores than pairs: pairs are shared out contiguously, still each item once.
-    const auto paired_fewer = split_work(causal, four_rows, 40U, 40U);
-    ASSERT_EQ(paired_fewer.size(), 40U);
-    check_each_item_once(paired_fewer, 128U);
+    EXPECT_LE(max_steps - min_steps, max_item_steps) << "longest first: the cores differ by at most one item";
 
-    // Odd chunk count (St=12, Sq=4 -> 3 chunks): contiguous over min(cores, items).
+    // Odd chunk count (St=12, Sq=4 -> 3 chunks): still each item once over min(cores, items).
     SDPAForwardShape odd = causal;
     odd.St = 12U;
-    EXPECT_EQ(num_causal_pairs(odd, four_rows), 0U);
-    EXPECT_EQ(num_work_units(odd, four_rows, kCores), num_work_items(odd, four_rows));
-    const auto contiguous =
-        split_work(odd, four_rows, std::min(kCores, num_work_units(odd, four_rows, kCores)), kCores);
-    ASSERT_EQ(contiguous.size(), 96U);
-    check_each_item_once(contiguous, 96U);
-    for (const auto& runs : contiguous) {
+    const auto odd_split = split_work(odd, four_rows, std::min(kCores, num_work_items(odd, four_rows)));
+    ASSERT_EQ(odd_split.size(), 96U);
+    check_each_item_once(odd_split, 96U);
+
+    // No mask: contiguous blocks, one run per core.
+    SDPAForwardShape none = causal;
+    none.mask_type = ttml::metal::AttentionMaskType::None;
+    const auto none_split = split_work(none, four_rows, kFewCores);
+    ASSERT_EQ(none_split.size(), kFewCores);
+    check_each_item_once(none_split, 128U);
+    for (const auto& runs : none_split) {
         EXPECT_EQ(runs.size(), 1U) << "a contiguous block is one run";
     }
 
-    // No mask: items, not pairs.
-    SDPAForwardShape none = causal;
-    none.mask_type = ttml::metal::AttentionMaskType::None;
-    EXPECT_EQ(num_work_units(none, four_rows, kCores), 128U);
-    const uint32_t none_cores = std::min(kCores, num_work_units(none, four_rows, kCores));
-    const auto none_split = split_work(none, four_rows, none_cores, kCores);
-    ASSERT_EQ(none_split.size(), none_cores);
-    check_each_item_once(none_split, 128U);
-
-    EXPECT_ANY_THROW(split_work(causal, four_rows, 65U, kPairCores)) << "more cores than pairs is a caller bug";
+    EXPECT_ANY_THROW(split_work(causal, four_rows, 129U)) << "more cores than items is a caller bug";
 }
 
 TEST_F(SDPAForwardTest, SDPAForwardTest_ChunkKnobs_DefaultFitsLargeHeadDim) {
