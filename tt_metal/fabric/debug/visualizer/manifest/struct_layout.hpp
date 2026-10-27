@@ -13,7 +13,6 @@
 #include <type_traits>
 #include <utility>
 #include <variant>
-#include <vector>
 
 #include <enchantum/enchantum.hpp>
 #include <enchantum/type_name.hpp>
@@ -175,16 +174,6 @@ struct TaggedUnionDescription {
     uint32_t size = 0;
     const EnumDescription* tag = nullptr;
     std::span<const TaggedUnionCase> cases;
-};
-
-// A struct's name and size, and its members, which cover every byte of it in order.
-// This is the manifest's representation of a struct type, regardless of whether it
-// could be described at compile time (ie. has a StructLayout specialization), or
-// was defined during runtime (ie. arch-specific structs).
-struct StructType {
-    std::string_view name;
-    uint32_t size = 0;
-    std::vector<Member> members;
 };
 
 // Each described struct specializes StructLayout<T> with its member list. There is no primary definition, so if a
