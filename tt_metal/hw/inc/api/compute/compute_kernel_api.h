@@ -363,9 +363,8 @@ ALWI void log_with_base_tile_init() {
 // clang-format on
 template <bool fast_and_approx = false, bool base_is_two = false, bool is_fp32_dest_acc_en = DST_ACCUM_MODE>
 ALWI void log_with_base_tile(uint32_t idst, uint32_t base_scale) {
-    MATH(if constexpr (
-        ckernel::sfpu::log10_bf16_whole_tile && !is_fp32_dest_acc_en && !fast_and_approx && !base_is_two) {
-        if (base_scale == 0x3ede5bd9u) {
+    MATH(if constexpr (ckernel::sfpu::log10_bf16_whole_tile && !is_fp32_dest_acc_en && !base_is_two) {
+        if (base_scale == ckernel::sfpu::log10_bf16_log_base_scale_factor_bits) {
             SFPU_UNARY_CALL(
                 DST_SYNC_MODE,
                 is_fp32_dest_acc_en,
@@ -540,7 +539,7 @@ ALWI void sign_tile_init() { MATH(SFPU_UNARY_INIT(sign)); }
  */
 // clang-format on
 ALWI void tiled_prod_tile(uint32_t idst) {
-    MATH(SFPU_UNARY_CALL(DST_SYNC_MODE, DST_ACCUM_MODE, calculate_tiled_prod, (APPROX), idst, VectorMode::RC));
+    MATH(SFPU_UNARY_CALL(DST_SYNC_MODE, DST_ACCUM_MODE, calculate_tiled_prod, (APPROX), idst, VectorMode::RC_custom));
 }
 
 /**
