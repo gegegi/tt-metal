@@ -917,16 +917,6 @@ void ComputeMeshRouterBuilder::create_kernel(tt::tt_metal::Program& program, con
             defines["FABRIC_2D_VC1_SERVICED"] = "";
         }
 
-        // intermesh_on_vc0: name the VC0 sender channel fed by the Z boundary router. It carries only
-        // inter-mesh landings, so the kernel polls it less often while it is idle, not on every pass.
-        if (intermesh_config.intermesh_on_vc0 && !is_inter_mesh_) {
-            const builder::RouterProducerSlots slots(
-                builder::routing_direction_to_eth_direction(location_.direction), vc_shape_.sender_counts);
-            if (const auto z_channel = slots.channel_for(0, eth_chan_directions::Z); z_channel.has_value()) {
-                defines["FABRIC_VC0_Z_LANDING_CHANNEL"] = std::to_string(*z_channel);
-            }
-        }
-
         // FABRIC_2D_VC2_SERVICED: Set when router has VC2 sender channels
         bool vc2_active = vc_shape_.sender_counts[2] > 0;
         if (vc2_active) {
