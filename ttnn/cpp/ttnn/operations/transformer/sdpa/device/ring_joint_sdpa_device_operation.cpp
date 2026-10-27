@@ -1167,71 +1167,20 @@ RingJointSDPAResult RingJointSDPADeviceOperation::create_output_tensors(
     };
 }
 
-ttsl::hash::hash_t RingJointSDPADeviceOperation::compute_program_hash(
+ttnn::dynamic_length::DynamicKey RingJointSDPADeviceOperation::dynamic_key(
     const RingJointSDPAParams& args, const RingJointSDPAInputs& tensor_args) {
+    ttnn::dynamic_length::DynamicKey key;
     // Under KV-pad rotation the kernels take the length from kv_actual_isl (host-patched or read on-device),
     // so logical_n leaves the key and one program serves every chunk depth on both paths.
-    const bool kv_pad_rotation_enabled = kv_pad_rotation_active(args, tensor_args);
-    const auto cache_key_logical_n = kv_pad_rotation_enabled ? 0 : args.logical_n;
-
-    std::vector<Tensor> input_tensors = {tensor_args.input_q, tensor_args.input_k};
-    if (tensor_args.input_v.has_value()) {
-        input_tensors.emplace_back(tensor_args.input_v.value());
+    if (kv_pad_rotation_active(args, tensor_args)) {
+        key.value(args.logical_n);
     }
-    if (tensor_args.joint_q.has_value()) {
-        input_tensors.emplace_back(tensor_args.joint_q.value());
-        input_tensors.emplace_back(tensor_args.joint_k.value());
+    // The layer fold is baked into kernel runtime args only on the metadata path; the host path re-patches the
+    // folded index per dispatch, so keying the factors there would only multiply programs per layer.
+    if (tensor_args.has_metadata()) {
+        key.depends_on(args.kv_cache_num_layers, args.kv_cache_layer_idx);
     }
-    if (tensor_args.joint_v.has_value()) {
-        input_tensors.emplace_back(tensor_args.joint_v.value());
-    }
-    input_tensors.emplace_back(tensor_args.gathered_k);
-    if (tensor_args.gathered_v.has_value()) {
-        input_tensors.emplace_back(tensor_args.gathered_v.value());
-    }
-    if (tensor_args.attention_sink.has_value()) {
-        input_tensors.emplace_back(tensor_args.attention_sink.value());
-    }
-
-    return tt::tt_metal::operation::hash_operation<RingJointSDPADeviceOperation>(
-        input_tensors,
-        args.joint_strategy,
-        args.scale,
-        args.is_causal,
-        args.is_balanced,
-        args.is_cross,
-        cache_key_logical_n,
-        args.logical_l,
-        tensor_args.joint_is_sharded(),
-        args.ring_size,
-        args.kv_stripe_split,
-        args.compute_kernel_config,
-        args.program_config,
-        args.ccl_core_grid_offset,
-        args.kv_cache_batch_idx.has_value(),
-        kv_pad_rotation_enabled,
-        tensor_args.has_metadata(),
-        // The metadata accessors are baked into compile-time args; the validator pins one form, so this key is
-        // defense in depth should that pin ever relax. Only the config is keyed, never the value.
-        tensor_args.slot_id.has_value() ? tensor_args.slot_id->memory_config() : tt::tt_metal::MemoryConfig{},
-        tensor_args.kv_actual_isl.has_value() ? tensor_args.kv_actual_isl->memory_config()
-                                              : tt::tt_metal::MemoryConfig{},
-        // Presence changes how the kernels compile; the numeric attrs above hash as stable placeholders.
-        tensor_args.has_logical_n_tensor(),
-        tensor_args.has_logical_l_tensor(),
-        tensor_args.has_kv_valid_end(),
-        tensor_args.has_kv_valid_end() ? tensor_args.kv_valid_end->memory_config() : tt::tt_metal::MemoryConfig{},
-        // The layer fold is baked into kernel runtime args only on the metadata path; the host path re-patches
-        // the folded index per dispatch, so keying the factors there would only multiply programs per layer.
-        tensor_args.has_metadata() ? args.kv_cache_num_layers : 0u,
-        tensor_args.has_metadata() ? args.kv_cache_layer_idx : 0u,
-        args.circular_kv_cache,
-        tensor_args.has_latent_v(),
-        tensor_args.v_num_heads(),
-        tensor_args.v_head_dim(args.latent_v_head_dim),
-        args.sliding_window_size,
-        args.all_gather_operation_attributes,
-        args.all_gather_tensor_args);
+    return key;
 }
 
 tt::tt_metal::operation::OpPerformanceModelGeneral<Tensors> RingJointSDPADeviceOperation::create_op_performance_model(
