@@ -23,8 +23,9 @@
 // Two lanes, like the sender: the master (RISCV_0 / NOC_0) owns the window and the
 // choices; the sub (RISCV_1 / NOC_1) copies the second half of each tensor over the
 // second cable link. The master tells the sub which slot to copy through go_slot and
-// go_count; the sub answers with done_count. With one cable link (z_lanes == 1) only the
-// master runs.
+// go_count; the sub answers with done_count. The same words tell the sub to open its cable
+// connection when the window opens and to close it before the links go back. With one
+// cable link (z_lanes == 1) only the master runs.
 
 #include <cstdint>
 
@@ -98,17 +99,33 @@ static_assert(2u * kRingDepth <= 15u, "two lanes of trids must fit in 0..15");
 constexpr uint32_t kSubSlotArgs = 2;
 constexpr uint32_t kMasterSlotArgs = 9;
 
+// Copy this lane's pages of slot k, then md_size bytes of metadata (none when 0), and
+// Flush-increment the entry relay's arrived[k] in the same packet as the last write.
 template <typename SlotArgs>
 FORCE_INLINE void copy_slot_half(
     const Noc& noc,
     tt::tt_fabric::WorkerToFabricEdmSender& z_conn,
     const SlotArgs& slot,
+    uint32_t k,
     uint32_t cb_l1_addr,
+    uint32_t md_l1_addr,
+    uint32_t md_size,
     volatile tt_l1_ptr PACKET_HEADER_TYPE* data_header) {
     auto in_acc = TensorAccessor(tensor_args, slot.src_addr);
     auto out_acc = TensorAccessor(tensor_args, slot.dst_addr);
-    d2d_relay::stream_pages<page_size, max_payload, kRingDepth, kTridBase>(
-        noc, z_conn, in_acc, out_acc, cb_l1_addr, page_start, page_end, data_header);
+    d2d_relay::stream_pages_then_inc<page_size, max_payload, kRingDepth, kTridBase>(
+        noc,
+        z_conn,
+        in_acc,
+        out_acc,
+        cb_l1_addr,
+        page_start,
+        page_end,
+        get_noc_addr(entry_noc_x, entry_noc_y, entry_md_base + k * metadata_span),
+        md_l1_addr,
+        md_size,
+        get_noc_addr(entry_noc_x, entry_noc_y, entry_arrived_base + k * word_stride),
+        data_header);
 }
 
 struct Slot {
@@ -134,54 +151,34 @@ void kernel_main() {
         return Slot{get_arg_val<uint32_t>(base), get_arg_val<uint32_t>(base + 1)};
     };
 
-    // Headers: [0] data to the entry chip, [1] increments to the entry chip,
-    // [2] credits (route set per source).
+    // Headers: [0] data and the fused increments to the entry chip, [1] credits (route set per source).
     CircularBuffer hdr_cb(header_cb);
-    // Each lane owns 3 headers and Depth ring pages: the two lanes run on two RISCs of one core.
-    const uint32_t hdr_l1 = hdr_cb.get_write_ptr() + (is_master ? 0u : 3u * sizeof(PACKET_HEADER_TYPE));
+    // Each lane owns 2 headers and Depth ring pages: the two lanes run on two RISCs of one core.
+    const uint32_t hdr_l1 = hdr_cb.get_write_ptr() + (is_master ? 0u : 2u * sizeof(PACKET_HEADER_TYPE));
     auto* data_header = reinterpret_cast<volatile tt_l1_ptr PACKET_HEADER_TYPE*>(hdr_l1);
-    auto* inc_header = reinterpret_cast<volatile tt_l1_ptr PACKET_HEADER_TYPE*>(hdr_l1 + sizeof(PACKET_HEADER_TYPE));
-    auto* credit_header =
-        reinterpret_cast<volatile tt_l1_ptr PACKET_HEADER_TYPE*>(hdr_l1 + 2 * sizeof(PACKET_HEADER_TYPE));
+    auto* credit_header = reinterpret_cast<volatile tt_l1_ptr PACKET_HEADER_TYPE*>(hdr_l1 + sizeof(PACKET_HEADER_TYPE));
     d2d_relay::set_route(data_header, entry_chip, entry_mesh);
-    d2d_relay::set_route(inc_header, entry_chip, entry_mesh);
 
     Noc noc(noc_index);
     CircularBuffer scratch(scratch_cb);
     const uint32_t cb_l1_addr = scratch.get_write_ptr() + (is_master ? 0u : kRingDepth * page_size);
     reset_noc_trid_barrier_counter(NOC_CLEAR_OUTSTANDING_REQ_MASK, noc_index);
 
-    volatile tt_l1_ptr uint32_t* go_count = reinterpret_cast<volatile tt_l1_ptr uint32_t*>(go_count_addr);
-    volatile tt_l1_ptr uint32_t* go_slot = reinterpret_cast<volatile tt_l1_ptr uint32_t*>(go_slot_addr);
-    volatile tt_l1_ptr uint32_t* done_count = reinterpret_cast<volatile tt_l1_ptr uint32_t*>(done_count_addr);
-
     if constexpr (!is_master) {
         // ---- Sub: copy the second half of whichever slot the master names ----
-        uint32_t last_go = 0;
-        while (true) {
-            bool stop = false;
-            while (true) {
-                if (d2d_relay::terminated(termination_addr, terminate_value)) {
-                    stop = true;
-                    break;
-                }
-                if (d2d_relay::advanced(go_count[0], last_go, 1)) {
-                    last_go += 1;
-                    break;
-                }
-            }
-            if (stop) {
-                break;
-            }
-            const uint32_t k = go_slot[0];
-            // Hold the cable link only while copying (the lease may give it to others).
-            z_conn.open();
-            copy_slot_half(noc, z_conn, slot_at(k), cb_l1_addr, data_header);
-            d2d_relay::fabric_atomic_inc(
-                z_conn, get_noc_addr(entry_noc_x, entry_noc_y, entry_arrived_base + k * word_stride), true, inc_header);
-            z_conn.close();
-            done_count[0] += 1;
-        }
+        // The cable link is held only inside the master's lease window (the lease gives it to others).
+        d2d_relay::run_sub_lane(
+            go_slot_addr,
+            go_count_addr,
+            done_count_addr,
+            termination_addr,
+            terminate_value,
+            [&]() { z_conn.open(); },
+            [&]() {
+                noc.async_write_barrier();
+                z_conn.close();
+            },
+            [&](uint32_t k) { copy_slot_half(noc, z_conn, slot_at(k), k, cb_l1_addr, 0, 0, data_header); });
         return;
     }
 
@@ -196,8 +193,7 @@ void kernel_main() {
     uint32_t last_arrived[num_slots] = {};
     uint32_t cable_sent[num_slots] = {};
     uint32_t last_data_ready = 0;
-    uint32_t go_local = 0;
-    uint32_t last_done = 0;
+    d2d_relay::SubLane sub{go_slot_addr, go_count_addr, done_count_addr, termination_addr, terminate_value};
     constexpr uint32_t kAllSlots = num_slots == 32 ? 0xFFFFFFFFu : ((1u << num_slots) - 1u);
 
     while (true) {
@@ -214,6 +210,9 @@ void kernel_main() {
         }
         if (stop) {
             break;
+        }
+        if constexpr (z_lanes > 1) {
+            sub.post(d2d_relay::kGoOpenConns);
         }
         z_conn.open();
         for (uint32_t c = 0; c < num_credit_conns; ++c) {
@@ -255,29 +254,19 @@ void kernel_main() {
 
                 // Copy: the sub takes the second half on the second link.
                 if constexpr (z_lanes > 1) {
-                    go_slot[0] = k;
-                    go_local += 1;
-                    go_count[0] = go_local;
+                    sub.post(k);
                 }
-                copy_slot_half(noc, z_conn, slot_at(k), cb_l1_addr, data_header);
-                if constexpr (metadata_enabled) {
-                    d2d_relay::fabric_write_bytes<max_payload>(
-                        z_conn,
-                        get_noc_addr(entry_noc_x, entry_noc_y, entry_md_base + k * metadata_span),
-                        k == own_slot ? own_md_addr : md_base + k * metadata_span,
-                        metadata_span,
-                        data_header);
-                }
-                d2d_relay::fabric_atomic_inc(
+                copy_slot_half(
+                    noc,
                     z_conn,
-                    get_noc_addr(entry_noc_x, entry_noc_y, entry_arrived_base + k * word_stride),
-                    true,
-                    inc_header);
+                    slot_at(k),
+                    k,
+                    cb_l1_addr,
+                    k == own_slot ? own_md_addr : md_base + k * metadata_span,
+                    metadata_enabled ? metadata_span : 0,
+                    data_header);
                 if constexpr (z_lanes > 1) {
-                    while (!d2d_relay::advanced(done_count[0], last_done, 1)) {
-                        invalidate_l1_cache();
-                    }
-                    last_done += 1;
+                    sub.wait();  // the sub has read its half of slot k
                 }
                 cable_sent[k] += 1;
 
@@ -303,10 +292,17 @@ void kernel_main() {
         }
 
         // 4. Window done (or terminating): drop every connection, hand the links back.
+        noc.async_write_barrier();
         noc_async_atomic_barrier();
         z_conn.close();
         for (uint32_t c = 0; c < num_credit_conns; ++c) {
             credit_conns[c].close();
+        }
+        if constexpr (z_lanes > 1) {
+            if (!stop) {
+                sub.post(d2d_relay::kGoCloseConns);
+                sub.wait();  // the sub's connection is closed before the links go back
+            }
         }
         link_grant[0] = 0;
         if (stop) {

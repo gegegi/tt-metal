@@ -24,7 +24,9 @@
 //
 // Two lanes: the master (RISCV_0 / NOC_0) owns the window; the sub (RISCV_1 / NOC_1)
 // copies the second half of a target's tensor on the second link of that direction, when
-// that direction has two links (lanes == 2 in the target's args).
+// that direction has two links (lanes == 2 in the target's args). The host starts the sub
+// only when some target has two lanes. The sub opens its connections when the master's
+// window opens and closes them before the master hands the links back.
 
 #include <cstdint>
 
@@ -114,7 +116,8 @@ FORCE_INLINE Target target_at(size_t slot_args, uint32_t k) {
 }
 
 // Copy pages [start, end) of staging k into the target's backing, then Flush-increment the
-// target's bytes_sent: the receiver kernel counts one increment per lane.
+// target's bytes_sent in the same packet as the last write: the receiver kernel counts one
+// increment per lane.
 FORCE_INLINE void copy_to_target(
     const Noc& noc,
     tt::tt_fabric::WorkerToFabricEdmSender& conn,
@@ -123,20 +126,24 @@ FORCE_INLINE void copy_to_target(
     uint32_t end,
     uint32_t cb_l1_addr,
     volatile tt_l1_ptr PACKET_HEADER_TYPE* data_header,
-    volatile tt_l1_ptr PACKET_HEADER_TYPE* inc_header,
     bool with_metadata,
     uint32_t md_l1_addr) {
     d2d_relay::set_route(data_header, t.chip, t.mesh);
-    d2d_relay::set_route(inc_header, t.chip, t.mesh);
     auto in_acc = TensorAccessor(tensor_args, t.src_addr);
     auto out_acc = TensorAccessor(tensor_args, t.dst_addr);
-    d2d_relay::stream_pages<page_size, max_payload, kRingDepth, kTridBase>(
-        noc, conn, in_acc, out_acc, cb_l1_addr, start, end, data_header);
-    if (with_metadata) {
-        d2d_relay::fabric_write_bytes<max_payload>(
-            conn, get_noc_addr(t.noc_x, t.noc_y, t.fifo_addr), md_l1_addr, metadata_span, data_header);
-    }
-    d2d_relay::fabric_atomic_inc(conn, get_noc_addr(t.noc_x, t.noc_y, t.bytes_sent_addr), true, inc_header);
+    d2d_relay::stream_pages_then_inc<page_size, max_payload, kRingDepth, kTridBase>(
+        noc,
+        conn,
+        in_acc,
+        out_acc,
+        cb_l1_addr,
+        start,
+        end,
+        get_noc_addr(t.noc_x, t.noc_y, t.fifo_addr),
+        md_l1_addr,
+        with_metadata ? metadata_span : 0,
+        get_noc_addr(t.noc_x, t.noc_y, t.bytes_sent_addr),
+        data_header);
 }
 
 void kernel_main() {
@@ -152,14 +159,12 @@ void kernel_main() {
     }
     const size_t slot_args = arg;
 
-    // Headers: [0] data, [1] increments to the target, [2] credits to the exit relay.
+    // Headers: [0] data and the fused increments to the target, [1] credits to the exit relay.
     CircularBuffer hdr_cb(header_cb);
-    // Each lane owns 3 headers and Depth ring pages: the two lanes run on two RISCs of one core.
-    const uint32_t hdr_l1 = hdr_cb.get_write_ptr() + (is_master ? 0u : 3u * sizeof(PACKET_HEADER_TYPE));
+    // Each lane owns 2 headers and Depth ring pages: the two lanes run on two RISCs of one core.
+    const uint32_t hdr_l1 = hdr_cb.get_write_ptr() + (is_master ? 0u : 2u * sizeof(PACKET_HEADER_TYPE));
     auto* data_header = reinterpret_cast<volatile tt_l1_ptr PACKET_HEADER_TYPE*>(hdr_l1);
-    auto* inc_header = reinterpret_cast<volatile tt_l1_ptr PACKET_HEADER_TYPE*>(hdr_l1 + sizeof(PACKET_HEADER_TYPE));
-    auto* credit_header =
-        reinterpret_cast<volatile tt_l1_ptr PACKET_HEADER_TYPE*>(hdr_l1 + 2 * sizeof(PACKET_HEADER_TYPE));
+    auto* credit_header = reinterpret_cast<volatile tt_l1_ptr PACKET_HEADER_TYPE*>(hdr_l1 + sizeof(PACKET_HEADER_TYPE));
     d2d_relay::set_route(credit_header, exit_chip, exit_mesh);
 
     Noc noc(noc_index);
@@ -167,35 +172,30 @@ void kernel_main() {
     const uint32_t cb_l1_addr = scratch.get_write_ptr() + (is_master ? 0u : kRingDepth * page_size);
     reset_noc_trid_barrier_counter(NOC_CLEAR_OUTSTANDING_REQ_MASK, noc_index);
 
-    volatile tt_l1_ptr uint32_t* go_count = reinterpret_cast<volatile tt_l1_ptr uint32_t*>(go_count_addr);
-    volatile tt_l1_ptr uint32_t* go_slot = reinterpret_cast<volatile tt_l1_ptr uint32_t*>(go_slot_addr);
-    volatile tt_l1_ptr uint32_t* done_count = reinterpret_cast<volatile tt_l1_ptr uint32_t*>(done_count_addr);
-
     if constexpr (!is_master) {
         // ---- Sub: copy pages [half, total) of whichever target the master names ----
-        uint32_t last_go = 0;
-        while (true) {
-            bool stop = false;
-            while (true) {
-                if (d2d_relay::terminated(termination_addr, terminate_value)) {
-                    stop = true;
-                    break;
+        d2d_relay::run_sub_lane(
+            go_slot_addr,
+            go_count_addr,
+            done_count_addr,
+            termination_addr,
+            terminate_value,
+            [&]() {
+                for (uint32_t c = 0; c < num_dir_conns; ++c) {
+                    dir_conns[c].open();
                 }
-                if (d2d_relay::advanced(go_count[0], last_go, 1)) {
-                    last_go += 1;
-                    break;
+            },
+            [&]() {
+                noc.async_write_barrier();
+                for (uint32_t c = 0; c < num_dir_conns; ++c) {
+                    dir_conns[c].close();
                 }
-            }
-            if (stop) {
-                break;
-            }
-            const Target t = target_at(slot_args, go_slot[0]);
-            auto& conn = dir_conns[t.sub_conn];
-            conn.open();
-            copy_to_target(noc, conn, t, half_pages, total_pages, cb_l1_addr, data_header, inc_header, false, 0);
-            conn.close();
-            done_count[0] += 1;
-        }
+            },
+            [&](uint32_t k) {
+                const Target t = target_at(slot_args, k);
+                copy_to_target(
+                    noc, dir_conns[t.sub_conn], t, half_pages, total_pages, cb_l1_addr, data_header, false, 0);
+            });
         return;
     }
 
@@ -209,8 +209,11 @@ void kernel_main() {
     uint32_t last_arrived[num_slots] = {};
     uint32_t sent[num_slots] = {};  // chunks delivered to each remote target
     uint32_t last_consumed = 0;
-    uint32_t go_local = 0;
-    uint32_t last_done = 0;
+    d2d_relay::SubLane sub{go_slot_addr, go_count_addr, done_count_addr, termination_addr, terminate_value};
+    bool has_sub = false;  // the host starts the sub only when some target has two lanes
+    for (uint32_t k = 0; k < num_slots; ++k) {
+        has_sub |= target_at(slot_args, k).lanes > 1;
+    }
     constexpr uint32_t kAllSlots = num_slots == 32 ? 0xFFFFFFFFu : ((1u << num_slots) - 1u);
 
     while (true) {
@@ -226,6 +229,9 @@ void kernel_main() {
         }
         if (stop) {
             break;
+        }
+        if (has_sub) {
+            sub.post(d2d_relay::kGoOpenConns);
         }
         z_conn.open();
         for (uint32_t c = 0; c < num_dir_conns; ++c) {
@@ -267,7 +273,9 @@ void kernel_main() {
                                  .noc_x_end = mcast_x_end,
                                  .noc_y_end = mcast_y_end,
                                  .addr = worker_md_addr});
-                            noc.async_write_barrier();
+                            // Same NoC and VC as the increment below, so a flush is enough to keep the
+                            // order: the metadata lands before data_ready.
+                            noc.async_writes_flushed();
                         }
                         noc_semaphore_inc_multicast(data_ready_mcast, 1, num_workers);
                         own_handed = true;
@@ -295,9 +303,7 @@ void kernel_main() {
                 const Target t = target_at(slot_args, k);
                 const bool two_lanes = t.lanes > 1;
                 if (two_lanes) {
-                    go_slot[0] = k;
-                    go_local += 1;
-                    go_count[0] = go_local;
+                    sub.post(k);
                 }
                 copy_to_target(
                     noc,
@@ -307,14 +313,10 @@ void kernel_main() {
                     two_lanes ? half_pages : total_pages,
                     cb_l1_addr,
                     data_header,
-                    inc_header,
                     metadata_enabled != 0,
                     md_base + k * metadata_span);
                 if (two_lanes) {
-                    while (!d2d_relay::advanced(done_count[0], last_done, 1)) {
-                        invalidate_l1_cache();
-                    }
-                    last_done += 1;
+                    sub.wait();  // the sub has read its half of staging k
                 }
                 sent[k] += 1;
                 // Staging k has been read: the exit relay may send the next chunk.
@@ -323,10 +325,15 @@ void kernel_main() {
             }
         }
 
+        noc.async_write_barrier();
         noc_async_atomic_barrier();
         z_conn.close();
         for (uint32_t c = 0; c < num_dir_conns; ++c) {
             dir_conns[c].close();
+        }
+        if (has_sub && !stop) {
+            sub.post(d2d_relay::kGoCloseConns);
+            sub.wait();  // the sub's connections are closed before the links go back
         }
         link_grant[0] = 0;
         if (stop) {

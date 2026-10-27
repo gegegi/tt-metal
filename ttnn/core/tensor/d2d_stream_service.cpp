@@ -1987,7 +1987,7 @@ void patch_receiver_config(
 }
 
 // Both relays: one scratch CB (each lane uses its own ring of kSenderReadRingSlots pages) and
-// one header CB (three headers per lane). The kernels add the sub lane's offsets themselves.
+// one header CB (two headers per lane). The kernels add the sub lane's offsets themselves.
 void create_relay_cbs(Program& program, const CoreCoord& core, uint32_t page_size, tt::tt_metal::DataType dtype) {
     const uint32_t scratch_bytes = 2 * kSenderReadRingSlots * page_size;
     auto scratch_cfg =
@@ -1995,7 +1995,7 @@ void create_relay_cbs(Program& program, const CoreCoord& core, uint32_t page_siz
             .set_page_size(tt::CBIndex::c_0, scratch_bytes);
     CreateCircularBuffer(program, core, scratch_cfg);
     const uint32_t header_size = tt::tt_fabric::get_tt_fabric_packet_header_size_bytes();
-    auto ph_cfg = CircularBufferConfig(6 * header_size, {{kPacketHeaderCbIndex, tt::DataFormat::UInt32}})
+    auto ph_cfg = CircularBufferConfig(4 * header_size, {{kPacketHeaderCbIndex, tt::DataFormat::UInt32}})
                       .set_page_size(kPacketHeaderCbIndex, header_size);
     CreateCircularBuffer(program, core, ph_cfg);
 }
