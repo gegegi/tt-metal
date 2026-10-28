@@ -10,6 +10,8 @@ FROM ${BASE}
 # Which consumer this image is for. smoke.yaml and basic.yaml install the same
 # set; sdk-examples.yaml installs the -dev and -examples packages instead, plus
 # libprotobuf-dev which it otherwise pulls from the network on every leg.
+# tt-train-tests.yaml takes smoke with PRODUCT=tt-ml, the set its artifact path
+# installs: there is no tt-ml runtime package, and tt-ml-validation needs tt-nn.
 ARG PROFILE=smoke
 # Which product's packages to add; mirrors the consumers' `product` input.
 ARG PRODUCT=tt-metalium
@@ -22,12 +24,17 @@ SHELL ["/bin/bash", "-euo", "pipefail", "-c"]
 # tt-metalium-jit is absent on use-system-sfpi builds, hence nullglob. The
 # product-specific set is checked separately, or a misspelled PRODUCT would be
 # satisfied by the tt-metalium packages alone and publish without its payload.
+# tt-nn is base for tt-ml for the same reason: as product it alone would pass.
 RUN --mount=type=bind,source=artifact,target=/tmp/pkgs \
     shopt -s nullglob \
     && case "${PROFILE}:${PRODUCT}" in \
         smoke:tt-metalium|smoke:tt-nn) \
             base=( /tmp/pkgs/tt-metalium_*.deb /tmp/pkgs/tt-metalium-jit_*.deb /tmp/pkgs/tt-metalium-validation_*.deb ); \
             product=( "/tmp/pkgs/${PRODUCT}"_*.deb "/tmp/pkgs/${PRODUCT}"-validation_*.deb ); \
+            extra=() ;; \
+        smoke:tt-ml) \
+            base=( /tmp/pkgs/tt-metalium_*.deb /tmp/pkgs/tt-metalium-jit_*.deb /tmp/pkgs/tt-nn_*.deb ); \
+            product=( /tmp/pkgs/tt-ml-validation_*.deb ); \
             extra=() ;; \
         examples:tt-metalium) \
             base=( /tmp/pkgs/tt-metalium_*.deb /tmp/pkgs/tt-metalium-jit_*.deb /tmp/pkgs/tt-metalium-dev_*.deb ); \
