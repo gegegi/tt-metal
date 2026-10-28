@@ -140,7 +140,7 @@ struct D2DStreamConfig {
     // receiver mesh runs an entry relay. Other chips send to their exit relay inside the
     // sender mesh, and the entry relay writes into the receivers inside the receiver
     // mesh. Both sides must set the same value. Requires a 2D fabric, share_fabric_links
-    // and no stage_gate. TT_METAL_FABRIC_INTERMESH_VC0=1 turns it on for every stream.
+    // and no stage_gate. TT_METAL_FABRIC_DISABLE_VC1=1 turns it on for every stream.
     bool relay = false;
 };
 

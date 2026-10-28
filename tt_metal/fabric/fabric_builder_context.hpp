@@ -52,14 +52,14 @@ struct IntermeshVCConfig {
     bool requires_vc1_full_mesh = false;            // True if VC1 needed throughout mesh (not just edges)
     bool requires_vc1_mesh_pass_through = false;    // True if VC1 must support inter-mesh pass-through
     bool requires_vc2 = false;                      // True if VC2 needed (Blackhole + 2D + no UDM/mux)
-    // Opt-in (TT_METAL_FABRIC_INTERMESH_VC0=1): no VC1 at all. Inter-mesh traffic crosses the Z link and lands
+    // Opt-in (TT_METAL_FABRIC_DISABLE_VC1=1): no VC1 at all. Inter-mesh traffic crosses the Z link and lands
     // on VC0, so every intra-mesh router is a single-mesh router. The boundary Z router fans out on VC0 to the
     // N and S routers only, and those routers on a boundary chip gain a VC0 slot for it (torus bubble flow
     // control treats it as a turn). A landed packet therefore cannot go E or W on the landing chip; the D2D
     // stream service turns on its relay under this variable, so its packets land on their final chip. Without
     // a separate VC, inter- and intra-mesh traffic share buffers, so this is deadlock-free only for traffic
     // that cannot form a cycle across meshes (e.g. leased D2D streams).
-    bool intermesh_on_vc0 = false;
+    bool vc1_disabled = false;
 
     IntermeshVCConfig() = default;
 

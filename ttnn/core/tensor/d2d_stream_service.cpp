@@ -241,7 +241,7 @@ ExchangedEndpoint exchange_service_cores(
         "peer (page_size={} num_pages={} socket_page_size={} num_socket_pages={} "
         "metadata_size_bytes={} share_fabric_links={} relay={}); "
         "sender and receiver must use the same global_spec, mapper, fifo_size, "
-        "metadata_size_bytes, share_fabric_links, and relay (TT_METAL_FABRIC_INTERMESH_VC0)",
+        "metadata_size_bytes, share_fabric_links, and relay (TT_METAL_FABRIC_DISABLE_VC1)",
         tensor_page_size,
         num_pages,
         socket_page_size,
@@ -302,12 +302,12 @@ std::optional<D2DStageGateConfig> enabled_stage_gate(const D2DStreamConfig& cfg)
 // Most gates a receiver can have. Each takes L1-alignment bytes of service-core L1.
 constexpr uint32_t kMaxStageGates = 1024;
 
-// TT_METAL_FABRIC_INTERMESH_VC0=1 makes the fabric carry inter-mesh traffic on VC0 with no VC1. Then a
+// TT_METAL_FABRIC_DISABLE_VC1=1 makes the fabric carry inter-mesh traffic on VC0 with no VC1. Then a
 // packet that lands in the receiver mesh can only go N or S from the landing chip. The relay makes every
 // packet land on its final chip, so the variable turns the relay on for every stream.
-void apply_intermesh_vc0(D2DStreamConfig& cfg) {
-    const char* on_vc0 = std::getenv("TT_METAL_FABRIC_INTERMESH_VC0");
-    if (on_vc0 != nullptr && std::string_view(on_vc0) == "1") {
+void apply_vc1_disabled(D2DStreamConfig& cfg) {
+    const char* disable_vc1 = std::getenv("TT_METAL_FABRIC_DISABLE_VC1");
+    if (disable_vc1 != nullptr && std::string_view(disable_vc1) == "1") {
         cfg.relay = true;
     }
 }
@@ -2608,7 +2608,7 @@ D2DStreamService::create_pair(
         "D2DStreamService: sender_mesh shape {} must equal receiver_mesh shape {} (1:1 coord mapping)",
         sender_mesh->shape(),
         receiver_mesh->shape());
-    CMAKE_UNIQUE_NAMESPACE::apply_intermesh_vc0(cfg);
+    CMAKE_UNIQUE_NAMESPACE::apply_vc1_disabled(cfg);
     CMAKE_UNIQUE_NAMESPACE::validate_stage_gate(cfg);
 
     // Run the mapper once; both sides share the per-shard spec + topology.
@@ -2701,7 +2701,7 @@ std::unique_ptr<D2DStreamServiceSender> D2DStreamService::create_sender(
         *ctx->rank(),
         *endpoints.sender_rank);
 
-    CMAKE_UNIQUE_NAMESPACE::apply_intermesh_vc0(cfg);
+    CMAKE_UNIQUE_NAMESPACE::apply_vc1_disabled(cfg);
 
     // Run the mapper locally; the receiver process runs the same mapper on its
     // identically-shaped mesh and derives the same per-shard spec.
@@ -2786,7 +2786,7 @@ std::unique_ptr<D2DStreamServiceReceiver> D2DStreamService::create_receiver(
         "D2DStreamService::create_receiver must run on the receiver rank (local rank {}, endpoints.receiver_rank {})",
         *ctx->rank(),
         *endpoints.receiver_rank);
-    CMAKE_UNIQUE_NAMESPACE::apply_intermesh_vc0(cfg);
+    CMAKE_UNIQUE_NAMESPACE::apply_vc1_disabled(cfg);
     CMAKE_UNIQUE_NAMESPACE::validate_stage_gate(cfg);
 
     auto mo = CMAKE_UNIQUE_NAMESPACE::run_mapper(cfg);

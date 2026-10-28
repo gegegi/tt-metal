@@ -180,7 +180,7 @@ PRODUCER_ENV="export PREFILL_PRODUCER_MANIFEST='${MANIFEST}'; ${PRODUCER_ENV}"
 
 # The VC0-only fabric switch, which also turns on the D2D relay. tt-run forwards only RUNNER_ENV, so pass it
 # explicitly, or ranks would disagree on the router shape and the stream layout.
-[ -n "${TT_METAL_FABRIC_INTERMESH_VC0:-}" ] && RUNNER_ENV+=" export TT_METAL_FABRIC_INTERMESH_VC0=${TT_METAL_FABRIC_INTERMESH_VC0};"
+[ -n "${TT_METAL_FABRIC_DISABLE_VC1:-}" ] && RUNNER_ENV+=" export TT_METAL_FABRIC_DISABLE_VC1=${TT_METAL_FABRIC_DISABLE_VC1};"
 # A PP model carries its descriptor in its rank binding, so only the discovery path needs one.
 if [ "${PP_RANKS}" -eq 0 ]; then
   [ -f "${MGD}" ] || { echo "no mesh-graph descriptor for ${CONFIG} at ${MGD}" >&2; exit 2; }
