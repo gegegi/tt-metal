@@ -891,7 +891,7 @@ FORCE_INLINE __attribute__((optimize("no-jump-tables"))) uint8_t forward_2d_disp
     const uint16_t payload_size_bytes = packet_start->payload_size_bytes;
     // The arms below skip a direction this router was built without, so a packet asking for one is
     // dropped and its receiver hangs. Routes never ask for one (for example E/W after a
-    // VC0 landing with VC1 disabled); with the watcher on, a wrong route stops here instead.
+    // VC0 landing with the intermesh VC disabled); with the watcher on, a wrong route stops here instead.
     constexpr uint8_t DEAD_ARMS = static_cast<uint8_t>(
         (((LIVE >> 0) & 1) ? 0 : Routing2DCodec::action_bit(dirs[0])) |
         (((LIVE >> 1) & 1) ? 0 : Routing2DCodec::action_bit(dirs[1])) |

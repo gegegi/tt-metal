@@ -1,31 +1,10 @@
 // SPDX-FileCopyrightText: © 2026 Tenstorrent USA, Inc.
 //
 // SPDX-License-Identifier: Apache-2.0
-//
-// Exit relay for D2DStreamService relay mode (D2DStreamConfig::relay).
-//
-// Runs on a service core of a sender-mesh chip that has a cable to the receiver mesh
-// (the exit chip). Some sender coords ("sources") are assigned to this cable. Slot k is
-// the k-th source. For a remote source, the unchanged persistent_d2d_sender.cpp writes its
-// tensor into this chip's staging tensor k and its metadata into md slot k, then
-// Flush-increments arrived[k] once per sender lane. For this chip's own coord (own_slot),
-// the workers increment data_ready directly, as they do for a normal sender service.
-//
-// Per lease window (link_grant == 1), every source is forwarded once, in arrival order:
-//   1. source k is ready: its data arrived, and the entry relay has freed slot k on the
-//      far side (cable_acked[k] caught up with cable_sent[k]);
-//   2. copy the tensor over the cable (Z) into the entry relay's destination for slot k,
-//      then the metadata, then Flush-increment the entry relay's arrived[k];
-//   3. give the source its credit: bytes_acked +1 on the source's sender service core
-//      (over fabric), or consumed_sem multicast to this chip's own workers.
-// Then close all connections and write link_grant = 0.
-//
-// Two lanes, like the sender: the master (RISCV_0 / NOC_0) owns the window and the
-// choices; the sub (RISCV_1 / NOC_1) copies the second half of each tensor over the
-// second cable link. The master tells the sub which slot to copy through go_slot and
-// go_count; the sub answers with done_count. The same words tell the sub to open its cable
-// connection when the window opens and to close it before the links go back. With one
-// cable link (z_lanes == 1) only the master runs.
+
+// Exit relay (D2DStreamConfig::relay), on a sender-mesh chip with a cable to the receiver mesh.
+// Each lease window: forward each staged source tensor over the cable, then credit its sender.
+// Master (RISCV_0) owns the window; the sub (RISCV_1) copies the second half on the second link.
 
 #include <cstdint>
 

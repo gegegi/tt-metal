@@ -261,17 +261,14 @@ def _socket_next(h2d_service, sockets, n_mtp: int = 0) -> tuple:
     return tokens, overhang, _decode_metadata(sockets.metadata)
 
 
-# TT_METAL_FABRIC_DISABLE_VC1=1 removes fabric VC1, so the inter-mesh traffic lands on VC0, and the D2D
-# service then sends the traffic between galaxies over the direct cables through relay cores
-# (D2DStreamConfig::relay). The adapter sets the default, so a deployment gets it with no environment
-# variable; TT_METAL_FABRIC_DISABLE_VC1=0 turns it off. The fabric reads the variable when the mesh
-# opens, so it must be set before open_mesh_device.
+# TT_METAL_FABRIC_DISABLE_INTERMESH_VC=1 puts inter-mesh traffic on VC0 and turns on the D2D relay. The adapter sets the
+# default; TT_METAL_FABRIC_DISABLE_INTERMESH_VC=0 turns it off. It must be set before the runtime starts.
 if ADAPTER.d2d_relay_default:
-    os.environ.setdefault("TT_METAL_FABRIC_DISABLE_VC1", "1")
-D2D_RELAY = os.environ.get("TT_METAL_FABRIC_DISABLE_VC1", "0") == "1"
+    os.environ.setdefault("TT_METAL_FABRIC_DISABLE_INTERMESH_VC", "1")
+D2D_RELAY = os.environ.get("TT_METAL_FABRIC_DISABLE_INTERMESH_VC", "0") == "1"
 if ADAPTER.d2d_relay_default and not D2D_RELAY:
     logger.warning(
-        f"[prefill] TT_METAL_FABRIC_DISABLE_VC1=0: {ADAPTER.name} runs without the relay, slower than deployed"
+        f"[prefill] TT_METAL_FABRIC_DISABLE_INTERMESH_VC=0: {ADAPTER.name} runs without the relay, slower than deployed"
     )
 
 
@@ -834,7 +831,7 @@ def _print_config() -> None:
         ("PREFILL_FABRIC_MODE", os.environ.get("PREFILL_FABRIC_MODE", "2d_torus_xy")),
         ("PREFILL_PP_D2D_FIFO_BYTES", str(D2D_FIFO_SIZE_BYTES)),
         (
-            "TT_METAL_FABRIC_DISABLE_VC1",
+            "TT_METAL_FABRIC_DISABLE_INTERMESH_VC",
             f"{int(D2D_RELAY)} (relay; adapter.d2d_relay_default={ADAPTER.d2d_relay_default})",
         ),
         ("PREFILL_H2D_SERVICE_ID", os.environ.get("PREFILL_H2D_SERVICE_ID", "ds_prefill")),

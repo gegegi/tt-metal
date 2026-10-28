@@ -58,9 +58,7 @@
 //       ./build/test/ttnn/multiprocess/unit_tests_cross_process_d2d
 
 #include <cstdint>
-#include <cstdlib>
 #include <memory>
-#include <string_view>
 #include <thread>
 #include <utility>
 #include <vector>
@@ -1279,10 +1277,8 @@ TEST_F(CrossProcessD2DFixture, MismatchedRelayThrows) {
     if (world_size < 2) {
         GTEST_SKIP() << "needs >= 2 ranks; got " << world_size;
     }
-    // TT_METAL_FABRIC_DISABLE_VC1=1 turns relay on for both sides, so they would match.
-    const char* disable_vc1 = std::getenv("TT_METAL_FABRIC_DISABLE_VC1");
-    if (disable_vc1 != nullptr && std::string_view(disable_vc1) == "1") {
-        GTEST_SKIP() << "TT_METAL_FABRIC_DISABLE_VC1=1 forces relay on for both sides";
+    if (tt::tt_fabric::IsIntermeshVCDisabled()) {
+        GTEST_SKIP() << "TT_METAL_FABRIC_DISABLE_INTERMESH_VC=1 forces relay on for both sides";
     }
 
     const ttnn::Shape global_shape({1, 1, 32, 64});

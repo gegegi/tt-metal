@@ -2,9 +2,6 @@
 //
 // SPDX-License-Identifier: Apache-2.0
 
-#include <cstdlib>
-#include <string_view>
-
 #include <tt_stl/fmt.hpp>
 #include "tt_metal/fabric/fabric_builder_context.hpp"
 #include "tt_metal/fabric/fabric_context.hpp"
@@ -115,8 +112,8 @@ void FabricBuilderContext::compute_max_channel_counts() {
     };
 
     // Always have MESH routers
-    bool intermesh_vc_config_active =
-        intermesh_vc_config_.requires_vc1 || intermesh_vc_config_.requires_vc2 || intermesh_vc_config_.vc1_disabled;
+    bool intermesh_vc_config_active = intermesh_vc_config_.requires_vc1 || intermesh_vc_config_.requires_vc2 ||
+                                      intermesh_vc_config_.intermesh_vc_disabled;
     possible_shapes.push_back(router_vc_shape(
         topology,
         RoutingDirection::N,
@@ -126,10 +123,10 @@ void FabricBuilderContext::compute_max_channel_counts() {
 
     // A Z-facing intermesh boundary introduces the boundary family (5 VC0 / 4 VC1) and mesh routers
     // on the same chips (4 VC0 / 4 VC1 when non-express); enumerate both. VC1 is required because
-    // the boundary shape is defined by its from-boundary VC1 fanout, unless vc1_disabled puts
-    // that fanout on VC0 (then there is no VC1, and the N and S mesh routers get one more VC0 slot).
-    const bool has_intermesh_z_boundary = (intermesh_vc_config_.requires_vc1 || intermesh_vc_config_.vc1_disabled) &&
-                                          fabric_has_intermesh_z_edge(control_plane.get_mesh_graph());
+    // the boundary shape is defined by its from-boundary VC1 fanout (on VC0 with intermesh_vc_disabled).
+    const bool has_intermesh_z_boundary =
+        (intermesh_vc_config_.requires_vc1 || intermesh_vc_config_.intermesh_vc_disabled) &&
+        fabric_has_intermesh_z_edge(control_plane.get_mesh_graph());
     if (has_intermesh_z_boundary) {
         const auto boundary_chip = chip_with_z(EdgeCapability::INTERMESH);
         possible_shapes.push_back(router_vc_shape(
@@ -385,18 +382,14 @@ IntermeshVCConfig FabricBuilderContext::compute_intermesh_vc_config() const {
             config = needs_mesh_pass_through ? IntermeshVCConfig::full_mesh_with_pass_through()
                                              : IntermeshVCConfig::full_mesh();
 
-            // Opt-in: inter-mesh traffic on VC0 and no VC1, so no intra-mesh router polls VC1 channels on every
-            // pass. The caller vouches that its inter-mesh traffic cannot form a buffer cycle across meshes.
-            // The D2D stream service reads the same variable and turns on its relay (D2DStreamConfig::relay).
-            const char* disable_vc1 = std::getenv("TT_METAL_FABRIC_DISABLE_VC1");
-            if (disable_vc1 != nullptr && std::string_view(disable_vc1) == "1" && !needs_mesh_pass_through) {
+            if (fabric_context_.get_rtoptions().get_disable_fabric_intermesh_vc() && !needs_mesh_pass_through) {
                 config = IntermeshVCConfig::disabled();
                 config.mode = IntermeshVCMode::FULL_MESH;
-                config.vc1_disabled = true;
+                config.intermesh_vc_disabled = true;
                 log_info(
                     tt::LogFabric,
-                    "VC1 disabled (TT_METAL_FABRIC_DISABLE_VC1): inter-mesh traffic lands on VC0, D2D relay on. "
-                    "Only safe for inter-mesh traffic that cannot form a buffer cycle across meshes");
+                    "Intermesh VC disabled (TT_METAL_FABRIC_DISABLE_INTERMESH_VC): inter-mesh traffic lands on "
+                    "VC0, D2D relay on");
             }
         }
     }

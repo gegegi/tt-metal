@@ -1,11 +1,9 @@
 // SPDX-FileCopyrightText: © 2026 Tenstorrent USA, Inc.
 //
 // SPDX-License-Identifier: Apache-2.0
-//
-// Helpers shared by the two D2D relay kernels (persistent_d2d_exit_relay.cpp and
-// persistent_d2d_entry_relay.cpp). The page streaming and the fabric write are the same
-// as in persistent_d2d_sender.cpp; here they take their sizes as template parameters,
-// because the relays copy many tensors (one per source or target) instead of one.
+
+// Helpers shared by the exit and entry relay kernels. Same streaming as persistent_d2d_sender.cpp,
+// with sizes as template parameters because a relay copies many tensors.
 
 #pragma once
 
@@ -24,10 +22,8 @@ namespace d2d_relay {
 constexpr uint32_t kGoOpenConns = 0xFFFFFFFEu;
 constexpr uint32_t kGoCloseConns = 0xFFFFFFFFu;
 
-// Write `size` bytes from contiguous L1 to one remote NoC address over fabric, split into
-// packets of at most MaxPayload bytes. The packet header must already hold the route.
-// A nonzero inc_addr makes the last packet a fused write + atomic increment of that word by 1,
-// flushed like fabric_atomic_inc(..., true, ...): the increment means "all my data has landed".
+// Write `size` bytes from L1 to a remote NoC address over fabric, in MaxPayload packets.
+// A nonzero inc_addr fuses a flushed atomic increment into the last packet ("all data landed").
 template <uint32_t MaxPayload>
 FORCE_INLINE void fabric_write_bytes(
     tt::tt_fabric::WorkerToFabricEdmSender& conn,
@@ -85,12 +81,9 @@ FORCE_INLINE bool terminated(uint32_t termination_addr, uint32_t terminate_value
     return reinterpret_cast<volatile tt_l1_ptr uint32_t*>(termination_addr)[0] == terminate_value;
 }
 
-// Copy pages [page_start, page_end) of one tensor to another chip over fabric. DRAM reads
-// run up to Depth pages ahead of the fabric writes, through a ring of Depth slots in the
-// scratch buffer at cb_l1_addr. Each slot has its own NoC transaction id (TridBase + slot),
-// so only the read for the page about to be sent is waited on. Same loop as
-// stream_half in persistent_d2d_sender.cpp. A nonzero inc_addr is fused into the last page's
-// last packet (see fabric_write_bytes).
+// Copy pages [page_start, page_end) to another chip over fabric, reading up to Depth pages
+// ahead (one NoC transaction id per ring slot). Same loop as stream_half in the sender kernel.
+// A nonzero inc_addr is fused into the last packet (see fabric_write_bytes).
 template <uint32_t PageSize, uint32_t MaxPayload, uint32_t Depth, uint32_t TridBase, typename InAcc, typename OutAcc>
 FORCE_INLINE void stream_pages(
     const Noc& noc,

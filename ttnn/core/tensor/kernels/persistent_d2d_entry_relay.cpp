@@ -1,32 +1,10 @@
 // SPDX-FileCopyrightText: © 2026 Tenstorrent USA, Inc.
 //
 // SPDX-License-Identifier: Apache-2.0
-//
-// Entry relay for D2DStreamService relay mode (D2DStreamConfig::relay).
-//
-// Runs on a service core of the receiver-mesh chip at the far end of a cable (the entry
-// chip). Slot k matches slot k of the exit relay: the same coord is source k there and
-// target k here. The exit relay writes target k's tensor into this chip's staging tensor k
-// (or, for this chip's own coord, straight into its receiver backing tensor), the metadata
-// into md slot k, then Flush-increments arrived[k] once per cable lane.
-//
-// Per lease window (link_grant == 1), every target is served once, in arrival order:
-//   * remote target t: when its data arrived and t's receiver has acked the previous chunk
-//     (recv_acked[k] == sent[k]), copy staging k into t's backing tensor, the metadata into
-//     t's receiver FIFO, Flush-increment t's bytes_sent once per lane (the unchanged
-//     persistent_d2d_receiver.cpp waits for that), then credit cable_acked[k] on the exit
-//     relay over the cable: staging k is free again.
-//   * own target (own_slot): act as this chip's receiver service. Multicast the metadata
-//     and data_ready to the workers, then poll (without blocking the other targets) for
-//     their consumed acks; credit the exit relay only after that, because the exit relay
-//     writes this target straight into the backing tensor the workers read.
-// Then close all connections and write link_grant = 0.
-//
-// Two lanes: the master (RISCV_0 / NOC_0) owns the window; the sub (RISCV_1 / NOC_1)
-// copies the second half of a target's tensor on the second link of that direction, when
-// that direction has two links (lanes == 2 in the target's args). The host starts the sub
-// only when some target has two lanes. The sub opens its connections when the master's
-// window opens and closes them before the master hands the links back.
+
+// Entry relay (D2DStreamConfig::relay), on the receiver-mesh chip at the far end of a cable.
+// Each lease window: copy each target's staged tensor to its receiver, then credit the exit relay.
+// Master (RISCV_0) owns the window; the sub (RISCV_1) copies the second half on a second link.
 
 #include <cstdint>
 
@@ -89,10 +67,7 @@ constexpr uint32_t kRingDepth = d2d_relay::floor_pow2(ring_slots);
 constexpr uint32_t kTridBase = 1u + (is_master ? 0u : kRingDepth);
 static_assert(2u * kRingDepth <= 15u, "two lanes of trids must fit in 0..15");
 
-// Per-slot runtime args (same layout for both lanes):
-//   [0] src_addr (staging k)  [1] dst_addr (target backing)  [2] t_chip  [3] t_mesh
-//   [4] t_noc_x  [5] t_noc_y  [6] t_fifo_addr  [7] t_bytes_sent_addr  [8] lanes
-//   [9] master conn index  [10] sub conn index
+// Per-slot runtime args, same layout for both lanes, in the field order of Target below.
 constexpr uint32_t kSlotArgs = 11;
 
 struct Target {

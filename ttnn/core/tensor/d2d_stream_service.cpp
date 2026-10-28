@@ -6,13 +6,11 @@
 
 #include <algorithm>
 #include <chrono>
-#include <cstdlib>
 #include <limits>
 #include <map>
 #include <memory>
 #include <optional>
 #include <set>
-#include <string_view>
 #include <vector>
 
 #include <tt_stl/assert.hpp>
@@ -169,8 +167,7 @@ struct ExchangedEndpoint {
 //     num_socket_pages, metadata_size_bytes, share_fabric_links, relay,
 //     x0, y0, addr0, x1, y1, addr1, ...] in `coords` order. The seven fingerprint
 // fields catch any peer mismatch (global_spec, mapper, fifo_size, metadata,
-// share_fabric_links, relay) before the fabric hangs silently. relay must match because
-// only a relay side enters exchange_relay_peer; the other side would never answer it. is_sender orders send/recv
+// share_fabric_links, relay) before the fabric hangs silently. is_sender orders send/recv
 // to avoid a symmetric-blocking deadlock.
 ExchangedEndpoint exchange_service_cores(
     const std::shared_ptr<distributed::multihost::DistributedContext>& ctx,
@@ -241,7 +238,7 @@ ExchangedEndpoint exchange_service_cores(
         "peer (page_size={} num_pages={} socket_page_size={} num_socket_pages={} "
         "metadata_size_bytes={} share_fabric_links={} relay={}); "
         "sender and receiver must use the same global_spec, mapper, fifo_size, "
-        "metadata_size_bytes, share_fabric_links, and relay (TT_METAL_FABRIC_DISABLE_VC1)",
+        "metadata_size_bytes, share_fabric_links, and relay (TT_METAL_FABRIC_DISABLE_INTERMESH_VC)",
         tensor_page_size,
         num_pages,
         socket_page_size,
@@ -302,12 +299,9 @@ std::optional<D2DStageGateConfig> enabled_stage_gate(const D2DStreamConfig& cfg)
 // Most gates a receiver can have. Each takes L1-alignment bytes of service-core L1.
 constexpr uint32_t kMaxStageGates = 1024;
 
-// TT_METAL_FABRIC_DISABLE_VC1=1 makes the fabric carry inter-mesh traffic on VC0 with no VC1. Then a
-// packet that lands in the receiver mesh can only go N or S from the landing chip. The relay makes every
-// packet land on its final chip, so the variable turns the relay on for every stream.
-void apply_vc1_disabled(D2DStreamConfig& cfg) {
-    const char* disable_vc1 = std::getenv("TT_METAL_FABRIC_DISABLE_VC1");
-    if (disable_vc1 != nullptr && std::string_view(disable_vc1) == "1") {
+// With the intermesh VC disabled, a landed packet can only go N or S, so every stream needs the relay.
+void apply_intermesh_vc_disabled(D2DStreamConfig& cfg) {
+    if (tt::tt_fabric::IsIntermeshVCDisabled()) {
         cfg.relay = true;
     }
 }
@@ -433,17 +427,9 @@ struct ServiceCoreReleaseGuard {
     }
 };
 
-// ---------------------------------------------------------------------------
-// Relay mode (D2DStreamConfig::relay)
-// ---------------------------------------------------------------------------
-//
-// A cable is a direct ethernet link from an exit chip of the sender mesh to an entry chip of
-// the receiver mesh. Every coord is assigned to one cable; slot k of a cable is the k-th of
-// its coords (sorted), on both ends. The exit chip's service core runs the exit relay instead
-// of a sender service, the entry chip's service core runs the entry relay instead of a
-// receiver service, and every other coord keeps its unchanged sender / receiver kernel, with
-// its socket config pointed at its relay. Both sides build the same plan from the same inputs:
-// the sender and receiver fabric node of every coord (known from the MeshSocket handshake).
+// Relay mode (D2DStreamConfig::relay). A cable links an exit chip (sender mesh) to an entry chip
+// (receiver mesh); each coord uses one cable, and slot k is its k-th coord on both ends.
+// Both sides build the same plan from the fabric nodes known after the MeshSocket handshake.
 
 struct RelayCable {
     distributed::MeshCoordinate exit_coord;
@@ -2608,7 +2594,7 @@ D2DStreamService::create_pair(
         "D2DStreamService: sender_mesh shape {} must equal receiver_mesh shape {} (1:1 coord mapping)",
         sender_mesh->shape(),
         receiver_mesh->shape());
-    CMAKE_UNIQUE_NAMESPACE::apply_vc1_disabled(cfg);
+    CMAKE_UNIQUE_NAMESPACE::apply_intermesh_vc_disabled(cfg);
     CMAKE_UNIQUE_NAMESPACE::validate_stage_gate(cfg);
 
     // Run the mapper once; both sides share the per-shard spec + topology.
@@ -2701,7 +2687,7 @@ std::unique_ptr<D2DStreamServiceSender> D2DStreamService::create_sender(
         *ctx->rank(),
         *endpoints.sender_rank);
 
-    CMAKE_UNIQUE_NAMESPACE::apply_vc1_disabled(cfg);
+    CMAKE_UNIQUE_NAMESPACE::apply_intermesh_vc_disabled(cfg);
 
     // Run the mapper locally; the receiver process runs the same mapper on its
     // identically-shaped mesh and derives the same per-shard spec.
@@ -2786,7 +2772,7 @@ std::unique_ptr<D2DStreamServiceReceiver> D2DStreamService::create_receiver(
         "D2DStreamService::create_receiver must run on the receiver rank (local rank {}, endpoints.receiver_rank {})",
         *ctx->rank(),
         *endpoints.receiver_rank);
-    CMAKE_UNIQUE_NAMESPACE::apply_vc1_disabled(cfg);
+    CMAKE_UNIQUE_NAMESPACE::apply_intermesh_vc_disabled(cfg);
     CMAKE_UNIQUE_NAMESPACE::validate_stage_gate(cfg);
 
     auto mo = CMAKE_UNIQUE_NAMESPACE::run_mapper(cfg);
