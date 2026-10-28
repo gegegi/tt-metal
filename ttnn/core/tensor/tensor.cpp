@@ -513,6 +513,12 @@ tt::tt_metal::distributed::MeshDevice* Tensor::device() const {
 
 const tt::tt_metal::distributed::MeshBuffer& Tensor::mesh_buffer() const { return device_storage().get_mesh_buffer(); }
 
+uint32_t Tensor::alignment() const { return mesh_buffer().alignment(); }
+tt::tt_metal::DeviceAddr Tensor::aligned_page_size() const { return mesh_buffer().aligned_page_size(); }
+uint32_t Tensor::num_dev_pages() const { return mesh_buffer().num_dev_pages(); }
+tt::tt_metal::DeviceAddr Tensor::aligned_size() const { return mesh_buffer().aligned_size(); }
+tt::tt_metal::DeviceAddr Tensor::aligned_size_per_bank() const { return mesh_buffer().aligned_size_per_bank(); }
+
 const tt::tt_metal::MemoryConfig& Tensor::memory_config() const {
     return tensor_spec().tensor_layout().get_memory_config();
 }

@@ -240,6 +240,21 @@ public:
     // Throws if the tensor is not allocated on a device.
     const tt::tt_metal::distributed::MeshBuffer& mesh_buffer() const;
 
+    // Page placement of the device buffer, forwarded from `MeshBuffer`.
+    // Each getter throws if the tensor is not allocated on a device, or if none of its device buffers are local to
+    // this host.
+
+    /// Alignment of the device buffer's memory type, in bytes.
+    uint32_t alignment() const;
+    /// Page size rounded up to the alignment.
+    tt::tt_metal::DeviceAddr aligned_page_size() const;
+    /// Number of pages on each device, including padding pages of sharded buffers.
+    uint32_t num_dev_pages() const;
+    /// Total size of the pages on each device, aligned.
+    tt::tt_metal::DeviceAddr aligned_size() const;
+    /// Size the allocation takes in each bank.
+    tt::tt_metal::DeviceAddr aligned_size_per_bank() const;
+
     // Returns the device the tensor is allocated on.
     // Returns nullptr if the tensor is not allocated on a device (on host/ deallocated).
     tt::tt_metal::distributed::MeshDevice* device() const;
