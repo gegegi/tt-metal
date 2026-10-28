@@ -178,9 +178,6 @@ if [ -n "${VARIANT}" ]; then
 fi
 PRODUCER_ENV="export PREFILL_PRODUCER_MANIFEST='${MANIFEST}'; ${PRODUCER_ENV}"
 
-# The VC0-only fabric switch, which also turns on the D2D relay. tt-run forwards only RUNNER_ENV, so pass it
-# explicitly, or ranks would disagree on the router shape and the stream layout.
-[ -n "${TT_METAL_FABRIC_DISABLE_INTERMESH_VC:-}" ] && RUNNER_ENV+=" export TT_METAL_FABRIC_DISABLE_INTERMESH_VC=${TT_METAL_FABRIC_DISABLE_INTERMESH_VC};"
 # A PP model carries its descriptor in its rank binding, so only the discovery path needs one.
 if [ "${PP_RANKS}" -eq 0 ]; then
   [ -f "${MGD}" ] || { echo "no mesh-graph descriptor for ${CONFIG} at ${MGD}" >&2; exit 2; }
@@ -273,7 +270,7 @@ cleanup() {
       || echo "no drafter PCC lines -- were the dflash_* configs in the table?"
   fi
   mkdir -p "${EVIDENCE_DIR}"
-  for path in "${PCC_DIR}" "${RANKLOGS}" "${PRODUCER_LOG}" "${TIMING_DIR}" "${BINDING:-}"; do
+  for path in "${PCC_DIR}" "${RANKLOGS}" "${PRODUCER_LOG}" "${BINDING:-}"; do
     [ -n "${path}" ] && [ -e "${path}" ] && cp -r "${path}" "${EVIDENCE_DIR}/" || true
   done
   if [ -d "${RANKLOGS}" ]; then
@@ -452,7 +449,7 @@ set +e
     export PREFILL_PRODUCER_CHECK_PCC=1; \
     export PREFILL_SEND_SHUTDOWN=1; \
     export PREFILL_STANDALONE_CHUNKED_PCC=${PCC_THRESHOLD}; \
-    export PREFILL_H2D_CONNECT_TIMEOUT=${PREFILL_H2D_CONNECT_TIMEOUT:-120}; \
+    export PREFILL_H2D_CONNECT_TIMEOUT=120; \
     ${NUM_LAYERS_ENV} \
     ${PRODUCER_ENV} \
     export LOGURU_LEVEL=INFO; \
