@@ -4,14 +4,22 @@
 
 #include "generic_op_nanobind.hpp"
 
+#include <cstddef>
+#include <cstdint>
+#include <optional>
 #include <string>
+#include <utility>
+#include <vector>
 
 #include <nanobind/nanobind.h>
+#include <nanobind/stl/optional.h>
+#include <nanobind/stl/pair.h>
 #include <nanobind/stl/string.h>
 #include <nanobind/stl/vector.h>
 
 #include "generic_op.hpp"
 #include "ttnn-nanobind/bind_function.hpp"
+#include "ttnn-nanobind/program_spec.hpp"
 #include <tt-metalium/program_descriptors.hpp>
 #include <tt_stl/reflection.hpp>
 
@@ -109,7 +117,175 @@ void bind_generic_operation_preparation(nb::module_& mod) {
         nb::arg("io_tensors"),
         nb::arg("program_descriptor"));
 
-    ttnn::bind_function<"prepare_generic_op", "ttnn.experimental.">(mod, doc, mesh_program_overload, program_overload);
+    // The Metal 2.0 forms join this binding: a second prepare_generic_op in the module would replace the first.
+    auto program_spec_overload = ttnn::overload_t(
+        static_cast<void (*)(
+            const std::vector<Tensor>&,
+            const ttnn::experimental::ProgramSpec&,
+            const ttnn::experimental::ProgramRunArgs&,
+            std::optional<uint64_t>)>(&ttnn::experimental::prepare_generic_op),
+        nb::arg("io_tensors"),
+        nb::arg("spec"),
+        nb::arg("run_args"),
+        nb::arg("custom_program_hash") = nb::none());
+
+    auto mesh_program_spec_overload = ttnn::overload_t(
+        static_cast<void (*)(
+            const std::vector<Tensor>&,
+            const ttnn::experimental::MeshProgramSpec&,
+            const ttnn::experimental::MeshProgramRunArgs&)>(&ttnn::experimental::prepare_generic_op),
+        nb::arg("io_tensors"),
+        nb::arg("mesh_program_spec"),
+        nb::arg("mesh_run_args"));
+
+    ttnn::bind_function<"prepare_generic_op", "ttnn.experimental.">(
+        mod, doc, mesh_program_overload, program_overload, program_spec_overload, mesh_program_spec_overload);
+}
+
+void bind_generic_operation_program_spec(nb::module_& mod) {
+    using ttnn::experimental::MeshProgramRunArgs;
+    using ttnn::experimental::MeshProgramSpec;
+    using ttnn::experimental::ProgramRunArgs;
+    using ttnn::experimental::ProgramSpec;
+    using ttnn::program_spec::TENSOR_ARGS_ATTRIBUTE;
+
+    nb::class_<MeshProgramSpec>(
+        mod,
+        "MeshProgramSpec",
+        R"doc(
+        Everything fixed about a mesh program: a ttnn.experimental.ProgramSpec for each mesh coordinate range, and
+        an optional custom_program_hash that replaces the hash of the specs in the program cache key (which still
+        includes each kernel's vararg counts). The ranges must not overlap. Lists are copied in and out.
+        )doc")
+        .def(
+            "__init__",
+            [](MeshProgramSpec* self,
+               std::vector<std::pair<MeshCoordinateRange, ProgramSpec>> programs,
+               std::optional<uint64_t> custom_program_hash) {
+                new (self) MeshProgramSpec{.programs = std::move(programs), .custom_program_hash = custom_program_hash};
+            },
+            nb::kw_only(),
+            nb::arg("programs") = std::vector<std::pair<MeshCoordinateRange, ProgramSpec>>{},
+            nb::arg("custom_program_hash") = nb::none())
+        .def_rw("programs", &MeshProgramSpec::programs, nb::rv_policy::copy)
+        .def_rw("custom_program_hash", &MeshProgramSpec::custom_program_hash, nb::for_setter(nb::arg("value").none()));
+
+    // A Python ProgramRunArgs keeps its tensors alive in an attribute. A MeshProgramRunArgs holds C++ copies of its
+    // run args, so it keeps a copy of each of those attributes, in the order of its programs.
+    const auto set_programs = [](nb::pointer_and_handle<MeshProgramRunArgs> self,
+                                 const std::vector<std::pair<MeshCoordinateRange, nb::object>>& programs,
+                                 bool construct) {
+        std::vector<std::pair<MeshCoordinateRange, ProgramRunArgs>> run_args;
+        nb::list tensors;
+        run_args.reserve(programs.size());
+        for (const auto& [range, program_run_args] : programs) {
+            run_args.emplace_back(range, nb::cast<const ProgramRunArgs&>(program_run_args));
+            tensors.append(nb::getattr(program_run_args, TENSOR_ARGS_ATTRIBUTE, nb::dict()).attr("copy")());
+        }
+        if (construct) {
+            new (self.p) MeshProgramRunArgs{.programs = std::move(run_args)};
+        } else {
+            self.p->programs = std::move(run_args);
+        }
+        nb::setattr(self.h, TENSOR_ARGS_ATTRIBUTE, tensors);
+    };
+    nb::class_<MeshProgramRunArgs>(
+        mod,
+        "MeshProgramRunArgs",
+        nb::dynamic_attr(),
+        R"doc(
+        The values of one mesh program run: a ttnn.experimental.ProgramRunArgs for each range of the
+        MeshProgramSpec. It keeps the tensors of its run args alive. Lists are copied in and out.
+        )doc")
+        .def(
+            "__init__",
+            [set_programs](
+                nb::pointer_and_handle<MeshProgramRunArgs> self,
+                const std::vector<std::pair<MeshCoordinateRange, nb::object>>& programs) {
+                set_programs(self, programs, /*construct=*/true);
+            },
+            nb::kw_only(),
+            nb::arg("programs") = std::vector<std::pair<MeshCoordinateRange, nb::object>>{})
+        .def_prop_rw(
+            "programs",
+            [](nb::pointer_and_handle<MeshProgramRunArgs> self) {
+                nb::object tensors = nb::getattr(self.h, TENSOR_ARGS_ATTRIBUTE, nb::none());
+                nb::list programs;
+                for (std::size_t i = 0; i < self.p->programs.size(); ++i) {
+                    const auto& [range, run_args] = self.p->programs[i];
+                    nb::object run_args_copy = nb::cast(run_args, nb::rv_policy::copy);
+                    if (!tensors.is_none()) {
+                        nb::setattr(run_args_copy, TENSOR_ARGS_ATTRIBUTE, tensors[i].attr("copy")());
+                    }
+                    programs.append(nb::make_tuple(range, run_args_copy));
+                }
+                return programs;
+            },
+            [set_programs](
+                nb::pointer_and_handle<MeshProgramRunArgs> self,
+                const std::vector<std::pair<MeshCoordinateRange, nb::object>>& programs) {
+                set_programs(self, programs, /*construct=*/false);
+            });
+
+    const char* doc = R"doc(
+        Runs a Metal 2.0 program, given as a ttnn.experimental.ProgramSpec (everything fixed about the program) and
+        a ttnn.experimental.ProgramRunArgs (the values of this call), with named arguments and tensors bound by name.
+        Experimental: the API may still change.
+
+        The first call with a given program compiles its kernels; later calls with the same program write only the
+        new argument values. Every call checks the run args against the spec: each kernel gets exactly its declared
+        arguments and varargs, and each tensor parameter gets a tensor from io_tensors that matches its spec.
+        Whether every core got its per-core values is checked on later calls only when
+        ttnn.CONFIG.validate_program_args is on.
+
+        Args:
+            io_tensors (List[ttnn.Tensor]): The tensors the program uses, with the preallocated output last. Each
+                tensor parameter binds its own entry, so a tensor bound to two parameters is listed twice. The list
+                may hold only the output.
+            spec (ttnn.experimental.ProgramSpec): The program, run on every device that holds the tensors.
+            run_args (ttnn.experimental.ProgramRunArgs): The values of this call.
+            custom_program_hash (int, optional): Replaces the hash of the spec in the program cache key, which
+                still includes each kernel's vararg counts. Keeping keys unique is then the caller's job.
+            mesh_program_spec (ttnn.experimental.MeshProgramSpec): A program per mesh coordinate range, in place
+                of spec.
+            mesh_run_args (ttnn.experimental.MeshProgramRunArgs): The values of this call for each range of the
+                MeshProgramSpec, in place of run_args.
+
+        Returns:
+            ttnn.Tensor: The output tensor, the last entry of io_tensors.
+
+        Example:
+            Refer to tests/ttnn/unit_tests/operations/debug/test_generic_op_program_spec.py for usage examples
+        )doc";
+
+    auto program_spec_overload = ttnn::overload_t(
+        static_cast<Tensor (*)(
+            const std::vector<Tensor>&, const ProgramSpec&, const ProgramRunArgs&, std::optional<uint64_t>)>(
+            &ttnn::experimental::generic_op),
+        nb::arg("io_tensors"),
+        nb::arg("spec"),
+        nb::arg("run_args"),
+        nb::arg("custom_program_hash") = nb::none());
+
+    auto mesh_program_spec_overload = ttnn::overload_t(
+        static_cast<Tensor (*)(const std::vector<Tensor>&, const MeshProgramSpec&, const MeshProgramRunArgs&)>(
+            &ttnn::experimental::generic_op),
+        nb::arg("io_tensors"),
+        nb::arg("mesh_program_spec"),
+        nb::arg("mesh_run_args"));
+
+    ttnn::bind_function<"generic_op", "ttnn.experimental.">(
+        mod, doc, program_spec_overload, mesh_program_spec_overload);
+
+    mod.def(
+        "compute_program_spec_hash",
+        &ttnn::experimental::compute_program_spec_hash,
+        nb::arg("spec"),
+        R"doc(
+        The hash of a ttnn.experimental.ProgramSpec that ttnn.experimental.generic_op keys its program cache on when
+        no custom_program_hash is given. Argument values, ProgramSpec.name and WorkUnitSpec.name are not part of it,
+        and tensor parameter specs are hashed under their relaxations.
+        )doc");
 }
 
 }  // namespace ttnn::operations::generic

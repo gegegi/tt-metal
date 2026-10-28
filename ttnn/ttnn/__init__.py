@@ -622,7 +622,8 @@ experimental.PrefetcherPipeSpace = _prefetcher_pipe.PrefetcherPipeSpace
 experimental.PrefetcherPipe = _prefetcher_pipe.PrefetcherPipe
 experimental.create_prefetcher_pipe_space = _prefetcher_pipe.create_prefetcher_pipe_space
 
-# Metal 2.0 ProgramSpec, ProgramRunArgs and the types they use. Experimental-only surface.
+# Metal 2.0 ProgramSpec, ProgramRunArgs and the types they use, for ttnn.experimental.generic_op.
+# Experimental-only surface.
 from ttnn._ttnn import program_spec as _program_spec
 from ttnn._ttnn.operations.experimental import fabric_mux as _fabric_mux
 
@@ -631,6 +632,10 @@ for _name in dir(_program_spec):
         setattr(experimental, _name, getattr(_program_spec, _name))
 del _name
 experimental.KernelBuildOptLevel = _fabric_mux.KernelBuildOptLevel
+# generic_op's mesh form and its program-cache hash; ttnn.experimental.generic_op itself is registered by its binding.
+experimental.MeshProgramSpec = ttnn._ttnn.operations.experimental.MeshProgramSpec
+experimental.MeshProgramRunArgs = ttnn._ttnn.operations.experimental.MeshProgramRunArgs
+experimental.compute_program_spec_hash = ttnn._ttnn.operations.experimental.compute_program_spec_hash
 
 Conv1dConfig = ttnn._ttnn.operations.conv.Conv2dConfig
 

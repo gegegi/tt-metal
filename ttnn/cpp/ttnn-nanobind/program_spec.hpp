@@ -13,4 +13,8 @@ namespace nb = nanobind;
 // re-exported under ttnn.experimental.
 void py_module_types(nb::module_& mod);
 
+// The attribute in which a Python ProgramRunArgs holds its tensor_args dict. The C++ object refers to the tensors'
+// MeshTensors, so the dict keeps them alive.
+inline constexpr const char* TENSOR_ARGS_ATTRIBUTE = "_tensor_args";
+
 }  // namespace ttnn::program_spec
