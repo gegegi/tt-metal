@@ -526,6 +526,19 @@ void kernel_main() {
     // every launch that gets the same set, and a faster rank can send a later launch's increments before this reader
     // exits; a reset to 0 would erase them and that launch would wait forever (same fix as minimal_default_reader).
     // Device 2.0 migration: legacy primitive retained, out_ready_sem is a GlobalSemaphore address.
+#if defined(WATCHER_DEBUG_DELAY)
+    // TEST-ONLY (tt-metal #62923 race-point repro): spin here, just before this reader releases its out_ready credits,
+    // on the one chip/core the watcher's atomic debug-delay mask selects (TT_METAL_ATOMIC_DEBUG_DELAY_CHIPS/_CORES,
+    // _RISCVS=TR0: TRISC0 issues no NOC atomics). Spin length: TT_METAL_WATCHER_DEBUG_DELAY cycles. Off by default:
+    // without TT_METAL_WATCHER + TT_METAL_WATCHER_DEBUG_DELAY this compiles out, and with an empty mask it never spins.
+    {
+        debug_insert_delays_msg_t tt_l1_ptr* race_delay = GET_MAILBOX_ADDRESS_DEV(watcher.debug_insert_delays);
+        if (race_delay[0].atomic_delay_processor_mask != 0) {
+            riscv_wait(WATCHER_DEBUG_DELAY);
+            race_delay[0].feedback |= (1u << 7);
+        }
+    }
+#endif
     const uint32_t sem_target = partial_readiness_enabled ? slices_expected * 2 : slices_expected;
     noc_semaphore_inc(get_noc_addr(out_ready_sem), uint32_t{0} - sem_target);
     // Flush non-posted atomics (op_signaler's and the credit subtract above) before kernel exit.
