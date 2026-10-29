@@ -276,8 +276,21 @@ class Generator(ModelCapabilitiesMixin, WarmupForwardMixin):
         self._deferred_decode_sampling_failed = False
         self.device_grammar_enabled = False
 
+        samplers = [getattr(model, "sampling", None) for model in self.model]
+        if self.model_capabilities.get("supports_sample_on_device", False) and not all(
+            sampler is not None for sampler in samplers
+        ):
+            # This mesh has no device sampler (e.g. the per-device vocab slice exceeds TOPK_MAX_WIDTH, or a
+            # prefetcher is in use): narrow the class capability so the serving runtime samples on host
+            # instead of asking decode for on-device logits that nothing can consume.
+            logger.info("On-device sampling unavailable on this mesh; narrowing supports_sample_on_device to False")
+            self.model_capabilities = {
+                **self.model_capabilities,
+                "supports_sample_on_device": False,
+                "supports_device_grammar": False,
+            }
+
         if self.model_capabilities.get("supports_device_grammar", False):
-            samplers = [getattr(model, "sampling", None) for model in self.model]
             sampling_dp = [getattr(model, "sampling_dp", 1) for model in self.model]
             self._device_grammar_available = all(sampler is not None for sampler in samplers) and all(
                 value == 1 for value in sampling_dp

@@ -109,6 +109,12 @@ class WarmupForwardMixin:
         """
         This function is called by vLLM
         """
+        if can_sample_on_device and not getattr(self, "model_capabilities", {}).get("supports_sample_on_device", True):
+            logger.info(
+                "Decode warmup: on-device sampling unavailable for this model instance, warming host sampling only"
+            )
+            can_sample_on_device = False
+            can_sample_device_grammar = False
         sampling_params = self._create_sampling_params(can_sample_on_device, max_batch_size, greedy_only=greedy_only)
 
         tokens, start_pos, page_table = self._create_decode_warmup_inputs(max_batch_size, num_blocks)
