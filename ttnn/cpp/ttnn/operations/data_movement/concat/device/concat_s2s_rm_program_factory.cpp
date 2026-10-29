@@ -87,7 +87,7 @@ ttnn::device_operation::ProgramArtifacts ConcatS2SRMProgramFactory::create_progr
         const uint32_t num_input_num_units_per_shard_height = shard_spec.shape[0];
         const uint32_t num_input_units = num_input_num_units_per_shard_height * num_input_num_units_per_shard_width;
         const uint32_t input_unit_size = shard_spec.shape[1] * inputs[input_id].get().element_size();
-        const uint32_t input_page_size = round_up_to_mul32(input_unit_size);
+        const uint32_t input_page_size = tt::round_up(input_unit_size, 32u);
 
         dataflow_buffers.push_back(DataflowBufferSpec{
             .unique_id = input_dfb_names[input_id],
@@ -100,7 +100,7 @@ ttnn::device_operation::ProgramArtifacts ConcatS2SRMProgramFactory::create_progr
 
     const uint32_t num_output_units = output.shard_spec().value().shape[0];
     const uint32_t output_unit_size = output.shard_spec().value().shape[1] * output.element_size();
-    const uint32_t output_page_size = round_up_to_mul32(output_unit_size);
+    const uint32_t output_page_size = tt::round_up(output_unit_size, 32u);
     dataflow_buffers.push_back(DataflowBufferSpec{
         .unique_id = OUTPUT_DFB,
         .entry_size = output_page_size,
