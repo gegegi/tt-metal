@@ -6,7 +6,7 @@
 
 #if __riscv_xtttensixqsr || (__clang__ && defined(ARCH_QUASAR) && defined(COMPILE_FOR_TRISC))
 #if __clang__
-// User is likely using static analysis tool. Provide a declarations.
+// User is likely using static analysis tool. Provide declarations.
 extern "C" void __builtin_rvtt_ttinsn(volatile unsigned long *, unsigned, unsigned, unsigned, unsigned) __attribute__((nothrow));
 extern "C" void __builtin_rvtt_ttreplay(volatile unsigned long *, unsigned, unsigned, unsigned, unsigned, unsigned, unsigned, unsigned)
     __attribute__((nothrow));
