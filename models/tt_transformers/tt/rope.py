@@ -789,10 +789,12 @@ class RotarySetup(LightweightModule):
             tuple(device.shape) if self.is_mesh_device else (),
             shard_batch_to_mesh_dim,
         )
-        # Always use (8, 8) on wormhole (compute_with_storage_grid_size returns (8, 9) on Galaxy)
-        self.core_grid = (
-            device.compute_with_storage_grid_size() if ttnn.get_arch_name() == "blackhole" else ttnn.CoreCoord(8, 8)
-        )
+        # Decode rope reads cos/sin from the core holding its Q (or, with fused QK, K) shard, and attention places
+        # those shards 8 wide on every arch (to_qk_fused_memory_config, num_to_corerange). Using the full Blackhole
+        # grid (11 wide) here put the cos/sin shards of a 16-core fused batch (batch 8) on cores (0..10, 0) and
+        # (0..4, 1) while K sat on (0..7, 1): wrong positions for every K user, garbage decode at batch 5..15.
+        # (8, 8) matches HfRotarySetup; wormhole/Galaxy also need it (compute_with_storage_grid_size is (8, 9) on TG).
+        self.core_grid = ttnn.CoreCoord(8, 8)
 
         self.start_core = ttnn.CoreCoord(1, 0)
         # Generate the cos/sin matrices needed for ttnn.embedding op

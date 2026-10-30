@@ -49,7 +49,7 @@ from models.tt_transformers.tt.rope import HfRotarySetup, RotarySetup
 )
 @pytest.mark.parametrize(
     "batch_size",
-    (1, 32),
+    (1, 8, 32),  # 8: fused-QK batch whose cos/sin grid is neither one row nor a multiple of 32 cores
 )
 @pytest.mark.parametrize(
     "max_seq_len",
